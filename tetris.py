@@ -8,23 +8,30 @@ import pygame
 BOARD_WIDTH = 10
 BOARD_HEIGHT = 20
 CELL_SIZE = 30
-MARGIN = 20
-SIDEBAR_WIDTH = 220
+MARGIN_X = 36
+MARGIN_Y = 30
+SIDEBAR_GAP = 44
+SIDEBAR_WIDTH = 280
 
 BOARD_PIXEL_WIDTH = BOARD_WIDTH * CELL_SIZE
 BOARD_PIXEL_HEIGHT = BOARD_HEIGHT * CELL_SIZE
-WINDOW_WIDTH = (MARGIN * 3) + BOARD_PIXEL_WIDTH + SIDEBAR_WIDTH
-WINDOW_HEIGHT = (MARGIN * 2) + BOARD_PIXEL_HEIGHT
+BOARD_ORIGIN_X = MARGIN_X
+BOARD_ORIGIN_Y = MARGIN_Y
+SIDEBAR_X = BOARD_ORIGIN_X + BOARD_PIXEL_WIDTH + SIDEBAR_GAP
+WINDOW_WIDTH = SIDEBAR_X + SIDEBAR_WIDTH + MARGIN_X
+WINDOW_HEIGHT = BOARD_ORIGIN_Y + BOARD_PIXEL_HEIGHT + MARGIN_Y
 
 FPS = 60
-BASE_FALL_INTERVAL = 0.60
-MIN_FALL_INTERVAL = 0.08
+BASE_FALL_INTERVAL = 0.40
+MIN_FALL_INTERVAL = 0.05
 
 BACKGROUND_COLOR = (16, 22, 33)
 BOARD_COLOR = (8, 12, 20)
 GRID_COLOR = (34, 46, 66)
 TEXT_COLOR = (235, 239, 247)
 OVERLAY_COLOR = (5, 8, 14, 180)
+GHOST_LINE_COLOR = (224, 240, 255)
+GHOST_FILL_ALPHA = 105
 
 PIECE_COLORS = {
     "I": (76, 195, 247),
@@ -158,8 +165,16 @@ class TetrisGame:
         self.score += points.get(cleared, 0) * self.level
 
     def _fall_interval(self) -> float:
-        interval = BASE_FALL_INTERVAL - ((self.level - 1) * 0.05)
+        interval = BASE_FALL_INTERVAL - ((self.level - 1) * 0.06)
         return max(MIN_FALL_INTERVAL, interval)
+
+    def ghost_drop_distance(self) -> int:
+        if self.current_piece is None:
+            return 0
+        distance = 0
+        while self._is_valid_position(self.current_piece, dy=distance + 1):
+            distance += 1
+        return distance
 
     def move(self, dx: int, dy: int) -> bool:
         if self.game_over or self.paused or self.current_piece is None:
@@ -223,20 +238,57 @@ def draw_block(
 
 
 def draw_board(surface: pygame.Surface, game: TetrisGame) -> None:
-    board_rect = pygame.Rect(MARGIN, MARGIN, BOARD_PIXEL_WIDTH, BOARD_PIXEL_HEIGHT)
+    board_rect = pygame.Rect(BOARD_ORIGIN_X, BOARD_ORIGIN_Y, BOARD_PIXEL_WIDTH, BOARD_PIXEL_HEIGHT)
     pygame.draw.rect(surface, BOARD_COLOR, board_rect, border_radius=8)
 
     for row_index, row in enumerate(game.board):
         for col_index, cell in enumerate(row):
             if cell is None:
                 continue
-            x = MARGIN + (col_index * CELL_SIZE)
-            y = MARGIN + (row_index * CELL_SIZE)
+            x = BOARD_ORIGIN_X + (col_index * CELL_SIZE)
+            y = BOARD_ORIGIN_Y + (row_index * CELL_SIZE)
             draw_block(surface, cell, x, y)
 
     if not game.game_over and game.current_piece is not None:
         piece = game.current_piece
+        ghost_distance = game.ghost_drop_distance()
         color = PIECE_COLORS[piece.kind]
+        ghost_color = tuple(min(255, value + 95) for value in color)
+
+        # Landing guide: a lightweight ghost projection + vertical reference lines.
+        if ghost_distance > 0:
+            for row_index, row in enumerate(piece.matrix):
+                for col_index, filled in enumerate(row):
+                    if not filled:
+                        continue
+                    board_x = piece.x + col_index
+                    current_y = piece.y + row_index
+                    ghost_y = current_y + ghost_distance
+                    if ghost_y >= 0:
+                        x = BOARD_ORIGIN_X + (board_x * CELL_SIZE)
+                        y = BOARD_ORIGIN_Y + (ghost_y * CELL_SIZE)
+                        guide_rect = pygame.Rect(x + 3, y + 3, CELL_SIZE - 6, CELL_SIZE - 6)
+                        ghost_block = pygame.Surface((guide_rect.width, guide_rect.height), pygame.SRCALPHA)
+                        pygame.draw.rect(
+                            ghost_block,
+                            (*ghost_color, GHOST_FILL_ALPHA),
+                            ghost_block.get_rect(),
+                            border_radius=4,
+                        )
+                        surface.blit(ghost_block, (guide_rect.x, guide_rect.y))
+                    if current_y >= 0:
+                        guide_x = BOARD_ORIGIN_X + (board_x * CELL_SIZE) + (CELL_SIZE // 2)
+                        start_y = BOARD_ORIGIN_Y + (current_y * CELL_SIZE) + CELL_SIZE
+                        end_y = BOARD_ORIGIN_Y + (ghost_y * CELL_SIZE)
+                        if end_y > start_y:
+                            pygame.draw.line(
+                                surface,
+                                GHOST_LINE_COLOR,
+                                (guide_x, start_y),
+                                (guide_x, end_y),
+                                2,
+                            )
+
         for row_index, row in enumerate(piece.matrix):
             for col_index, filled in enumerate(row):
                 if not filled:
@@ -245,16 +297,28 @@ def draw_board(surface: pygame.Surface, game: TetrisGame) -> None:
                 board_y = piece.y + row_index
                 if board_y < 0:
                     continue
-                x = MARGIN + (board_x * CELL_SIZE)
-                y = MARGIN + (board_y * CELL_SIZE)
+                x = BOARD_ORIGIN_X + (board_x * CELL_SIZE)
+                y = BOARD_ORIGIN_Y + (board_y * CELL_SIZE)
                 draw_block(surface, color, x, y)
 
     for line in range(BOARD_WIDTH + 1):
-        x = MARGIN + (line * CELL_SIZE)
-        pygame.draw.line(surface, GRID_COLOR, (x, MARGIN), (x, MARGIN + BOARD_PIXEL_HEIGHT), 1)
+        x = BOARD_ORIGIN_X + (line * CELL_SIZE)
+        pygame.draw.line(
+            surface,
+            GRID_COLOR,
+            (x, BOARD_ORIGIN_Y),
+            (x, BOARD_ORIGIN_Y + BOARD_PIXEL_HEIGHT),
+            1,
+        )
     for line in range(BOARD_HEIGHT + 1):
-        y = MARGIN + (line * CELL_SIZE)
-        pygame.draw.line(surface, GRID_COLOR, (MARGIN, y), (MARGIN + BOARD_PIXEL_WIDTH, y), 1)
+        y = BOARD_ORIGIN_Y + (line * CELL_SIZE)
+        pygame.draw.line(
+            surface,
+            GRID_COLOR,
+            (BOARD_ORIGIN_X, y),
+            (BOARD_ORIGIN_X + BOARD_PIXEL_WIDTH, y),
+            1,
+        )
 
 
 def draw_next_piece(surface: pygame.Surface, kind: str, x: int, y: int) -> None:
@@ -277,16 +341,16 @@ def draw_sidebar(
     label_font: pygame.font.Font,
     body_font: pygame.font.Font,
 ) -> None:
-    panel_x = (MARGIN * 2) + BOARD_PIXEL_WIDTH
+    panel_x = SIDEBAR_X
     title = title_font.render("TETRIS", True, TEXT_COLOR)
-    surface.blit(title, (panel_x, MARGIN))
+    surface.blit(title, (panel_x, BOARD_ORIGIN_Y))
 
     stats = [
         f"Score: {game.score}",
         f"Lines: {game.lines}",
         f"Level: {game.level}",
     ]
-    y = MARGIN + 54
+    y = BOARD_ORIGIN_Y + 54
     for text in stats:
         label = label_font.render(text, True, TEXT_COLOR)
         surface.blit(label, (panel_x, y))
@@ -306,7 +370,7 @@ def draw_sidebar(
         "R: Restart",
         "Esc: Quit",
     ]
-    y = MARGIN + 280
+    y = BOARD_ORIGIN_Y + 280
     for index, text in enumerate(controls):
         font = label_font if index == 0 else body_font
         control_text = font.render(text, True, TEXT_COLOR)
@@ -393,4 +457,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
